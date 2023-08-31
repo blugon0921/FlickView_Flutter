@@ -2,15 +2,16 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:easy_sidemenu/easy_sidemenu.dart';
+import 'package:flick_view/FFmpeg.dart';
 import 'package:flick_view/FFprobe.dart';
 import 'package:flick_view/main.dart';
 import 'package:flick_view/widget/SideBarItem.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:window_size/window_size.dart';
 
 
@@ -33,53 +34,84 @@ class PlayingPage extends State<PlayingScreen> {
   SideMenuController sideBar = SideMenuController();
   final List<SideBarItem> sideItems = [];
   // final List<SideBarItem> sideItems = [];
+  final thumbnailsFolder = "${appData.path}\\thumbnails";
 
   var videoDuration = "";
   var videoSize = Size(0, 0);
 
+  // var thumbnailPath = "assets/images/unloadedThumbnail.png";
+  // var thumbnailPath = "C:\\CodingFile\\Flutter\\FlickView\\assets\\images\\unloadedThumbnail.png";
+  var thumbnailPath = "";
+
   @override
   void initState() {
+    Directory(thumbnailsFolder).createSync(recursive: true);
     player.open(Media(widget.file.path));
     setWindowTitle("Flick View | ${basename(widget.file.path)}");
-    WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
+    WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
       _addSideItems();
     });
-    WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
-      // final Directory root = findRoot(await getApplicationDocumentsDirectory());
-      // print(root.path);
-      Directory directory = Directory("./");
-      print(directory.path);
-      var items = (await dirContents(directory)).whereType<File>();
-      for (var value in items) {
-        print(value.path);
-      }
-      // var dbPath = join(directory.path, "app.txt");
-      // ByteData data = await rootBundle.load("assets/windows/ffprobe.exe");
-      // List<int> bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-      // (await File(dbPath).writeAsBytes(bytes);
+    Timer.periodic(Duration(milliseconds: 1), (timer) { //Update State
+      if(ffmpegFolder.ffmpeg().existsSync() && ffmpegFolder.ffprobe().existsSync()) {
+        WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
+          var ffmpeg = FFmpeg(ffmpegFolder.ffmpeg().path);
+          var ffprobe = FFprobe(ffmpegFolder.ffprobe().path);
+          //Info
+          var info = await ffprobe.info(widget.file.path);
+          if(info == null) {
+            videoDuration = "0";
+            videoSize = Size(0, 0);
+          } else {
+            videoDuration = durationToTime(Duration(milliseconds: (info.duration*1000).toInt()));
+            videoSize = Size(info.size.width, info.size.height);
+          }
+          setState(() { });
 
-      var path = "assets/windows/ffprobe.exe";
-      if(Platform.isMacOS) path = "assets/macos/ffprobe";
-      if(Platform.isLinux) path = "assets/linux/ffprobe";
-      // var ffprobe = FFprobe(path);
-      var ffprobe = FFprobe("C:\\CodingFile\\Flutter\\FlickView\\assets\\ffmpeg\\windows\\ffprobe.exe");
-      var duration = (await ffprobe.getDuration(widget.file.path));
-      var size = (await ffprobe.getSize(widget.file.path));
-      duration ??= 0;
-      size ??= Size(0, 0);
-      videoDuration = durationToTime(Duration(milliseconds: (duration*1000).toInt()));
-      videoSize = Size(size.width, size.height);
-      setState(() { });
+          //Thumbnail
+          var thumbnailFile = File("$thumbnailsFolder\\${basename(widget.file.path)}.png");
+          if(!thumbnailFile.existsSync()) {
+            var thumbnailFile = await saveThumbnail(widget.file.path, ffmpeg, ffprobe);
+          }
+          if(thumbnailFile.existsSync()) {
+            thumbnailPath = thumbnailFile.path;
+          }
+          setState(() { });
+        });
+        timer.cancel();
+      } else if(videoDuration == "") {
+        videoDuration = "FFMPEG 다운로드중...";
+        setState(() { });
+      }
     });
-    // Timer.periodic(Duration(milliseconds: 1), (timer) { //Update State
-    //   if(player.state.width != null) {
-    //     setState(() {
-    //       videoState = player.state;
-    //     });
-    //     timer.cancel();
-    //   }
-    // });
+    ServicesBinding.instance.keyboard.addHandler(_onKey);
     super.initState();
+  }
+
+  bool _onKey(KeyEvent event) {
+    final key = event.logicalKey.keyLabel;
+
+    if(event is KeyDownEvent) {
+      if(key == "Escape") {
+        runApp(MyScreen());
+      }
+    }
+    return false;
+  }
+
+  Future<File> saveThumbnail(String videoPath, FFmpeg ffmpeg, FFprobe ffprobe) async {
+    var info = await ffprobe.info(videoPath);
+    if(info == null) {
+      return File("$thumbnailsFolder\\${basename(videoPath)}.png");
+    }
+    var width = info.size.width;
+    var height = info.size.height;
+    var saveTime = info.duration/2;
+    var ratio = width/height;
+    height = 300;
+    width = (height*ratio).floorToDouble();
+    return await ffmpeg.saveScreenshot(videoPath, saveTime, "$thumbnailsFolder\\${basename(videoPath)}.png",
+      scale: Size(width, height)
+    );
   }
 
   _addSideItems() async {
@@ -90,7 +122,7 @@ class PlayingPage extends State<PlayingScreen> {
       if(!mimeType.startsWith("video")) continue;
       sideItems.add(SideBarItem(
         // thumbnailPath: basename(value.path),
-        thumbnailPath: "assets/test/thumbnail.png",
+        // thumbnailPath: "assets/test/thumbnail.png",
         videoPath: value.path,
       ));
       setState(() {});
@@ -120,6 +152,15 @@ class PlayingPage extends State<PlayingScreen> {
     var fullSize = MediaQuery.of(context).size;
     var sideBarWidth = (fullSize.width*25/100-3).floorToDouble();
 
+    var thumbnail = Image.asset("assets/images/unloadedThumbnail.png",
+      width: sideBarWidth,
+    );
+    if(thumbnailPath != "") {
+      thumbnail = Image.file(File(thumbnailPath),
+        width: sideBarWidth,
+      );
+    }
+
     return MaterialApp(
       home: Row(
         mainAxisAlignment: MainAxisAlignment.start,
@@ -138,13 +179,13 @@ class PlayingPage extends State<PlayingScreen> {
           ),
           Container(
             color: Color(0xFF27292E),
+            height: fullSize.height,
             child: SingleChildScrollView (
               scrollDirection: Axis.vertical,
               child: Column(
                 children: [
-                  Image.asset("assets/test/thumbnail.png",
-                    width: sideBarWidth,
-                  ),
+                  // Image.asset(thumbnail,
+                  thumbnail,
                   Container(
                     width: sideBarWidth,
                     height: sideBarWidth*0.11609498680738786279683377308707,

@@ -1,20 +1,19 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flick_view/FFmpeg.dart';
 import 'package:flick_view/FFprobe.dart';
 import 'package:flick_view/main.dart';
 import 'package:flick_view/playing.dart';
 import 'package:flutter/material.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path/path.dart';
 
 class SideBarItem extends StatefulWidget {
-  final String thumbnailPath;
+  // final String thumbnailPath;
   final String videoPath;
   SideBarItem({
     super.key,
-    required this.thumbnailPath,
+    // required this.thumbnailPath,
     required this.videoPath,
   });
 
@@ -23,48 +22,82 @@ class SideBarItem extends StatefulWidget {
 }
 
 class _SideBarItemState extends State<SideBarItem> {
-  // final player = Player();
-  // late final controller = VideoController(player);
-  // late var videoState = PlayerState();
-
   var videoDuration = "";
   var videoSize = Size(0, 0);
+  final thumbnailsFolder = "${appData.path}\\thumbnails";
+
+  var thumbnailPath = "";
 
   @override
   void initState() {
-    // player.open(Media(widget.videoPath), play: false);
-    // Timer.periodic(Duration(milliseconds: 1), (timer) { //Update State
-    //   if(player.state.width != null) {
-    //     setState(() {
-    //       videoState = player.state;
-    //     });
-    //     timer.cancel();
-    //     player.dispose();
-    //     // print("${videoState.width} x ${videoState.height}");
-    //   }
-    // });
+    Timer.periodic(Duration(milliseconds: 1), (timer) { //Update State
+      if(ffmpegFolder.ffmpeg().existsSync() && ffmpegFolder.ffprobe().existsSync()) {
+        WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
+          var ffmpeg = FFmpeg(ffmpegFolder.ffmpeg().path);
+          var ffprobe = FFprobe(ffmpegFolder.ffprobe().path);
+          //Info
+          var info = await ffprobe.info(widget.videoPath);
+          if(info == null) {
+            videoDuration = "0";
+            videoSize = Size(0, 0);
+          } else {
+            videoDuration = durationToTime(Duration(milliseconds: (info.duration*1000).toInt()));
+            videoSize = Size(info.size.width, info.size.height);
+          }
+          setState(() { });
 
-    WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
-      var path = "assets/windows/ffprobe.exe";
-      if(Platform.isMacOS) path = "assets/macos/ffprobe";
-      if(Platform.isLinux) path = "assets/linux/ffprobe";
-      // var ffprobe = FFprobe(path);
-      var ffprobe = FFprobe("C:\\CodingFile\\Flutter\\FlickView\\assets\\ffmpeg\\windows\\ffprobe.exe");
-      var duration = (await ffprobe.getDuration(widget.videoPath));
-      var size = (await ffprobe.getSize(widget.videoPath));
-      duration ??= 0;
-      size ??= Size(0, 0);
-      videoDuration = durationToTime(Duration(milliseconds: (duration*1000).toInt()));
-      videoSize = Size(size.width, size.height);
-      setState(() { });
+          //Thumbnail
+          var thumbnailFile = File("$thumbnailsFolder\\${basename(widget.videoPath)}.png");
+          if(!thumbnailFile.existsSync()) {
+            var thumbnailFile = await saveThumbnail(widget.videoPath, ffmpeg, ffprobe);
+          }
+          if(thumbnailFile.existsSync()) {
+            thumbnailPath = thumbnailFile.path;
+          }
+          setState(() { });
+        });
+        timer.cancel();
+      } else if(videoDuration == "") {
+        videoDuration = "FFMPEG 다운로드중...";
+        setState(() { });
+      }
     });
     super.initState();
+  }
+
+  Future<File> saveThumbnail(String videoPath, FFmpeg ffmpeg, FFprobe ffprobe) async {
+    var info = await ffprobe.info(videoPath);
+    if(info == null) {
+      return File("$thumbnailsFolder\\${basename(videoPath)}.png");
+    }
+    var width = info.size.width;
+    var height = info.size.height;
+    var saveTime = info.duration/2;
+    var ratio = width/height;
+    height = 300;
+    width = (height*ratio).floorToDouble();
+    return await ffmpeg.saveScreenshot(videoPath, saveTime, "$thumbnailsFolder\\${basename(videoPath)}.png",
+        scale: Size(width, height)
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     var fullSize = MediaQuery.of(context).size;
     var sideBarWidth = (fullSize.width*25/100-3).floorToDouble();
+
+    // var thumbnail = Image.asset("assets/images/unloadedThumbnail.png",
+    //   height: fullSize.height*7.5/100,
+    // );
+    var thumbnail = Image.asset("assets/images/unloadedThumbnail.png",
+        // width: (fullSize.width*7.5/100).floorToDouble(), // 20%
+        height: fullSize.height*7.5/100
+    );
+    if(thumbnailPath != "") {
+      thumbnail = Image.file(File(thumbnailPath),
+        height: fullSize.height*7.5/100
+      );
+    }
 
     return Container(
       margin: EdgeInsets.only(bottom: 5),
@@ -83,12 +116,9 @@ class _SideBarItemState extends State<SideBarItem> {
             Container(
               margin: EdgeInsets.only(left: 10),
               child: ClipRRect(
-                // borderRadius: BorderRadius.circular(sideBarWidth*0.02638522427440633245382585751979),
                 borderRadius: BorderRadius.circular(fullSize.height*0.01111111111111111111111111111111),
-                child: Image.asset(widget.thumbnailPath,
-                  // width: (fullSize.width*7.5/100).floorToDouble(), // 20%
-                  height: fullSize.height*7.5/100
-                ),
+                // child: Image.asset(widget.thumbnailPath,
+                child: thumbnail,
               ),
             ),
             Expanded(
@@ -144,15 +174,6 @@ class _SideBarItemState extends State<SideBarItem> {
                 ),
               )
             ),
-            // Video(
-            //   controller: controller,
-            //   width: 0,
-            //   height: 0,
-            //   controls: AdaptiveVideoControls,
-            //   fill: Color(0xff1E1F22),
-            //   filterQuality: FilterQuality.low,
-            //   aspectRatio: 0,
-            // )
           ],
         ),
         onPressed: () async {
